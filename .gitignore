@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Streamlit
+.streamlit/
+
+# OpenDSS output artifacts
+feeders/**/*.txt
+feeders/**/*.csv
+
+# macOS
+.DS_Store
