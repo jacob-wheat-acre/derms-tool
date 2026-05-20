@@ -7,10 +7,80 @@ import opendssdirect as dss
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
-FEEDER_DIR = os.path.join(os.path.dirname(__file__), "feeders", "ieee123")
-MASTER     = os.path.join(FEEDER_DIR, "Run_IEEE123Bus.DSS")
-
 ANSI_LO, ANSI_HI = 0.95, 1.05
+
+_ROOT = os.path.dirname(__file__)
+
+FEEDERS: dict[str, dict] = {
+    "IEEE 123-Bus": {
+        "master": os.path.join(_ROOT, "feeders", "ieee123", "Run_IEEE123Bus.DSS"),
+        "source_bus": "150",
+        "default_der_bus": "57",
+        "caption": "IEEE 123-Bus Test Case (Kersting 1991) · 4.16 kV · 91 loads",
+        "profile_intro": (
+            "The feeder starts at **Bus 150** (the substation), set at 1.00 pu. Voltage "
+            "generally drops as you move away from the substation because current flowing "
+            "through line resistance causes a voltage drop. The regulators (transformer tap "
+            "changers) boost voltage at key points to keep everything within **ANSI A limits: "
+            "0.95–1.05 pu**.\n\n"
+            "Because this is an unbalanced distribution feeder, phases A, B, and C are shown "
+            "separately — a single-phase lateral on phase B only appears in the blue trace. "
+            "Hover over any point to see the bus and exact voltage."
+        ),
+        "der_intro": (
+            "When a customer or developer installs PV on a feeder, voltage **rises** at that "
+            "bus and upstream — potentially pushing buses above the ANSI limit. The DERMS needs "
+            "to detect this and either curtail the PV or dispatch reactive absorption from smart "
+            "inverters."
+        ),
+    },
+    "IEEE 13-Bus": {
+        "master": os.path.join(_ROOT, "feeders", "ieee13", "Run_IEEE13Bus.DSS"),
+        "source_bus": "650",
+        "default_der_bus": "671",
+        "caption": "IEEE 13-Node Test Case (Kersting 2001) · 4.16 kV · 8 load buses",
+        "profile_intro": (
+            "The feeder starts at **Bus 650** (the substation) with a source voltage of 1.06 pu. "
+            "A voltage regulator between 650 and 632 maintains voltage near 1.02 pu at the head "
+            "of the feeder. This feeder is **heavily unbalanced** — single-phase and two-phase "
+            "laterals create significant voltage differences between phases A, B, and C.\n\n"
+            "Bus 634 is on a 480 V wye secondary; its per-unit voltage is relative to the 480 V "
+            "base. Hover over any point to see the bus and exact voltage."
+        ),
+        "der_intro": (
+            "The 13-bus feeder is heavily loaded and unbalanced, making it an excellent testbed "
+            "for DER impact analysis. Adding PV on a single-phase lateral (e.g. bus 652 or 611) "
+            "creates strong voltage imbalance. The DERMS must detect and correct per-phase "
+            "overvoltage — not just aggregate feeder voltage."
+        ),
+    },
+    "IEEE 9500-Node": {
+        "master": os.path.join(_ROOT, "feeders", "ieee9500", "Run_IEEE9500.DSS"),
+        "source_bus": "sourcebus",
+        "default_der_bus": "190-8593",
+        "caption": "IEEE 9500-Node Test Feeder (PNNL) · 12.47 kV · ~9,500 nodes · geographic coordinates",
+        "large_feeder": True,
+        "der_kv_min": 1.0,
+        "hc_sample_n": 60,
+        "profile_intro": (
+            "This is the **PNNL IEEE 9500-node test feeder** — a large-scale realistic distribution "
+            "system located near Kennewick, Washington. It feeds from a 115 kV transmission bus "
+            "through 69 kV and 12.47 kV distribution feeders down to 120/240 V service buses.\n\n"
+            "The base case already has **110 undervoltage buses** on the 120 V secondary — a "
+            "realistic condition in heavily loaded residential feeders. Bus coordinates are "
+            "geographic (latitude/longitude), so the network map is a true geographic view."
+        ),
+        "der_intro": (
+            "With ~9,500 nodes and 3-phase primary feeders at 12.47 kV, the 9500-node feeder "
+            "demonstrates DERMS at utility scale. PV is added at the 12.47 kV primary level — "
+            "typical for community solar or commercial rooftop systems that interconnect above "
+            "the service transformer. Watch how a single large installation affects voltages "
+            "across the entire geographic footprint of the feeder."
+        ),
+    },
+}
+
+_current_master: str = ""
 
 
 # ── DSS command helper ─────────────────────────────────────────────────────────
@@ -22,23 +92,29 @@ def _cmd(txt: str) -> str:
 
 # ── Solve helpers ──────────────────────────────────────────────────────────────
 
-def solve_base() -> None:
-    _cmd(f'Redirect "{MASTER}"')
+def solve_base(master: str = "") -> None:
+    global _current_master
+    if master:
+        _current_master = master
+    _cmd("Clear")
+    _cmd("Set DefaultBaseFrequency=60")
+    _cmd(f'Redirect "{_current_master}"')
     _cmd("Solve")
 
 
-def solve_with_pv(bus: str, kw: float, pf: float = 1.0) -> None:
-    solve_base()
+def solve_with_pv(bus: str, kw: float, pf: float = 1.0, reload_base: bool = True) -> None:
+    if reload_base:
+        solve_base()
     dss.Circuit.SetActiveBus(bus)
-    kv_base = dss.Bus.kVBase()          # line-to-neutral kV
-    nodes   = dss.Bus.Nodes()           # e.g. [1,2,3] or [2] or [1,3]
+    kv_base = dss.Bus.kVBase()
+    nodes   = dss.Bus.Nodes()
     nph     = len(nodes)
 
     if nph == 3:
-        kv = kv_base * 1.7321           # line-to-line
+        kv = kv_base * 1.7321
         bus1_str = bus
     else:
-        kv = kv_base                    # line-to-neutral for 1- or 2-phase
+        kv = kv_base
         phase_str = ".".join(str(n) for n in nodes)
         bus1_str = f"{bus}.{phase_str}"
 
@@ -56,14 +132,14 @@ def extract_buses() -> dict[str, dict]:
     """Return dict keyed by bus name with geometry and voltage data."""
     out: dict[str, dict] = {}
     for b in dss.Circuit.AllBusNames():
-        if b.endswith("r"):          # skip regulator internal buses
+        if b.endswith("r"):
             continue
         dss.Circuit.SetActiveBus(b)
         x, y = dss.Bus.X(), dss.Bus.Y()
-        if x == 0.0 and y == 0.0:   # no coordinate data
+        if x == 0.0 and y == 0.0:
             continue
-        nodes   = dss.Bus.Nodes()   # e.g. [1,2,3] or [2]
-        pv_ang  = dss.Bus.puVmagAngle()     # [V1,a1,V2,a2,...] pu
+        nodes   = dss.Bus.Nodes()
+        pv_ang  = dss.Bus.puVmagAngle()
         vmags   = [pv_ang[i * 2] for i in range(len(nodes))]
         out[b] = dict(
             x=x, y=y, kv=dss.Bus.kVBase(),
@@ -112,6 +188,118 @@ def extract_loads() -> list[dict]:
     return out
 
 
+def extract_substation_transformers(buses: dict) -> list[dict]:
+    """Return large power transformers (≥5 MVA, primary ≥10 kV) that have mapped coordinates.
+    Excludes regulator-controlled transformers (those are returned by extract_regulators).
+    """
+    reg_xfmr_names: set[str] = set()
+    n = dss.RegControls.First()
+    while n:
+        reg_xfmr_names.add(dss.RegControls.Transformer().lower())
+        n = dss.RegControls.Next()
+
+    out = []
+    n = dss.Transformers.First()
+    while n:
+        name = dss.Transformers.Name()
+        if name.lower() in reg_xfmr_names:
+            n = dss.Transformers.Next()
+            continue
+        kva = dss.Transformers.kVA()
+        dss.Transformers.Wdg(1)
+        kv1 = dss.Transformers.kV()
+        dss.Transformers.Wdg(2)
+        kv2 = dss.Transformers.kV()
+        if kva >= 5000 and kv1 >= 10.0:
+            dss.Circuit.SetActiveElement(f"Transformer.{name}")
+            b = dss.CktElement.BusNames()[0].split(".")[0].lower()
+            if b in buses:
+                out.append(dict(
+                    name=name, kva=kva, kv1=kv1, kv2=kv2,
+                    x=buses[b]["x"], y=buses[b]["y"],
+                ))
+        n = dss.Transformers.Next()
+    return out
+
+
+def extract_feeder_zones(buses: dict) -> dict[str, str]:
+    """Return {bus_name: meter_name} for circuits with >1 EnergyMeter, else {}."""
+    if dss.Meters.Count() <= 1:
+        return {}
+    zones: dict[str, str] = {}
+    n = dss.Meters.First()
+    while n:
+        name = dss.Meters.Name()
+        for branch in dss.Meters.AllBranchesInZone():
+            dss.Circuit.SetActiveElement(branch)
+            for bname in dss.CktElement.BusNames():
+                b = bname.split(".")[0].lower()
+                if b in buses:
+                    zones[b] = name
+        n = dss.Meters.Next()
+    return zones
+
+
+def extract_switches(buses: dict) -> list[dict]:
+    """Lines that are switches (breakers, sectionalizers, tie switches)."""
+    out = []
+    n = dss.Lines.First()
+    while n:
+        is_sw = dss.Lines.IsSwitch()
+        if is_sw:
+            name = dss.Lines.Name()
+            b1   = dss.Lines.Bus1().split(".")[0].lower()
+            b2   = dss.Lines.Bus2().split(".")[0].lower()
+            nph  = dss.Lines.Phases()
+            dss.Circuit.SetActiveElement(f"Line.{name}")
+            is_open = bool(dss.CktElement.IsOpen(1, 0))
+            # Use bus with known coordinates
+            x = y = None
+            for b in (b1, b2):
+                if b in buses:
+                    x, y = buses[b]["x"], buses[b]["y"]
+                    break
+            if x is not None:
+                out.append(dict(name=name, x=x, y=y, nph=nph, is_open=is_open))
+        n = dss.Lines.Next()
+    return out
+
+
+def extract_fuses(buses: dict) -> list[dict]:
+    out = []
+    n = dss.Fuses.First()
+    while n:
+        name = dss.Fuses.Name()
+        dss.Circuit.SetActiveElement(f"Fuse.{name}")
+        bnames = dss.CktElement.BusNames()
+        if bnames:
+            b = bnames[0].split(".")[0].lower()
+            if b in buses:
+                out.append(dict(name=name, x=buses[b]["x"], y=buses[b]["y"]))
+        n = dss.Fuses.Next()
+    return out
+
+
+def extract_regulators(buses: dict) -> list[dict]:
+    out = []
+    n = dss.RegControls.First()
+    while n:
+        name  = dss.RegControls.Name()
+        xfmr  = dss.RegControls.Transformer()
+        vreg  = dss.RegControls.ForwardVreg()
+        band  = dss.RegControls.ForwardBand()
+        dss.Circuit.SetActiveElement(f"Transformer.{xfmr}")
+        bnames = dss.CktElement.BusNames()
+        if bnames:
+            b = bnames[0].split(".")[0].lower()
+            if b in buses:
+                out.append(dict(name=name, xfmr=xfmr,
+                                x=buses[b]["x"], y=buses[b]["y"],
+                                vreg=vreg, band=band))
+        n = dss.RegControls.Next()
+    return out
+
+
 def extract_caps() -> list[dict]:
     out = []
     n = dss.Capacitors.First()
@@ -125,12 +313,11 @@ def extract_caps() -> list[dict]:
 
 
 def extract_summary() -> dict:
-    tp  = dss.Circuit.TotalPower()   # [P_kW, Q_kvar] negative = load convention
-    lss = dss.Circuit.Losses()       # [P_watts, Q_vars]
+    tp  = dss.Circuit.TotalPower()
+    lss = dss.Circuit.Losses()
     buses = extract_buses()
-    vmins = [d["vmin"] for d in buses.values()]
-    n_lo  = sum(1 for v in vmins if v < ANSI_LO)
-    n_hi  = sum(1 for v in vmins if v > ANSI_HI)
+    n_lo  = sum(1 for d in buses.values() if d["vmin"] < ANSI_LO)
+    n_hi  = sum(1 for d in buses.values() if d["vmax"] > ANSI_HI)
     return dict(
         load_kw=-tp[0], load_kvar=-tp[1],
         loss_kw=lss[0] / 1000,
@@ -169,6 +356,5 @@ def hosting_capacity_sweep(
         if progress_cb:
             progress_cb((idx + 1) / total)
 
-    # Restore base case
     solve_base()
     return results

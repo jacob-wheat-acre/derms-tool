@@ -1,0 +1,13 @@
+! Run script for IEEE 13-Node Test Feeder
+
+Compile (IEEE13Master.dss)
+
+! Allow one tap change per iteration so regulator converges cleanly
+RegControl.creg1.maxtapchange=1  Delay=15
+
+Set MaxControlIter=30
+
+New EnergyMeter.Feeder Line.L650-632 1
+
+Solve
+Buscoords BusCoords.dat

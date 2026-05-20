@@ -1,0 +1,124 @@
+! IEEE 13-Node Test Feeder (Kersting 2001)
+! Source: IEEE Distribution Test Feeders Working Group
+
+Clear
+Set DefaultBaseFrequency=60
+
+New object=circuit.ieee13
+~ basekv=4.16 Bus1=650 pu=1.0578 angle=30
+~ R1=0 X1=0.0001 R0=0 X0=0.0001
+
+! ── Line impedance matrices (ohm/mile, from Kersting 2001) ────────────────────
+
+New Linecode.mtx601 nphases=3 basefreq=60 NormAmps=400 EmergAmps=600
+~ rmatrix=(0.3465|0.1560 0.3375|0.1580 0.1535 0.3414)
+~ xmatrix=(1.0179|0.5017 1.0478|0.4236 0.3849 1.0348)
+~ cmatrix=(11.155|-3.375 11.452|-1.547 -0.8308 11.041)
+~ units=mi
+
+! Config 603 — phases B and C, 1/0 ACSR overhead
+New Linecode.mtx603 nphases=2 basefreq=60 NormAmps=230 EmergAmps=400
+~ rmatrix=(1.3238|0.2066 1.3294)
+~ xmatrix=(1.3569|0.4591 1.3471)
+~ units=mi
+
+! Config 604 — phases A and C, 1/0 ACSR overhead (same impedances as 603)
+New Linecode.mtx604 nphases=2 basefreq=60 NormAmps=230 EmergAmps=400
+~ rmatrix=(1.3238|0.2066 1.3294)
+~ xmatrix=(1.3569|0.4591 1.3471)
+~ units=mi
+
+! Config 605 — phase C only, #2 ACSR overhead
+New Linecode.mtx605 nphases=1 basefreq=60 NormAmps=230 EmergAmps=400
+~ rmatrix=(1.3292)
+~ xmatrix=(1.3475)
+~ units=mi
+
+! Config 606 — 3-phase underground (250 kcmil, concentric neutral)
+New Linecode.mtx606 nphases=3 basefreq=60 NormAmps=230 EmergAmps=400
+~ rmatrix=(0.7982|0.3192 0.7891|0.2849 0.3192 0.7982)
+~ xmatrix=(0.4463|0.0328 0.4041|-0.0143 0.0328 0.4463)
+~ cmatrix=(26.667|0 26.667|0 0 26.667)
+~ units=mi
+
+! Config 607 — phase A underground (1/0 triplex)
+New Linecode.mtx607 nphases=1 basefreq=60 NormAmps=230 EmergAmps=400
+~ rmatrix=(1.3425)
+~ xmatrix=(0.5124)
+~ cmatrix=(26.667)
+~ units=mi
+
+! ── Regulator 650 → 650r (controls voltage at head of feeder) ─────────────────
+
+New Transformer.reg1 Phases=3 Windings=2
+~ Buses=[650, 650r]
+~ conns=[Wye, Wye]
+~ kVAs=[2000, 2000]
+~ kVs=[2.4018, 2.4018]
+~ %Rs=[0, 0]
+~ XHL=0.01
+
+New RegControl.creg1 Transformer=reg1 winding=2 vreg=122 band=2 ptratio=20 ctprim=700 R=3 X=9
+
+! ── Line segments ─────────────────────────────────────────────────────────────
+
+New Line.L650-632  Phases=3 Bus1=650r      Bus2=632       LineCode=mtx601 Length=2000 units=ft
+New Line.L632-671  Phases=3 Bus1=632       Bus2=671       LineCode=mtx601 Length=2000 units=ft
+New Line.L632-633  Phases=3 Bus1=632       Bus2=633       LineCode=mtx601 Length=500  units=ft
+New Line.L632-645  Phases=2 Bus1=632.3.2   Bus2=645.3.2   LineCode=mtx603 Length=500  units=ft
+New Line.L645-646  Phases=2 Bus1=645.3.2   Bus2=646.3.2   LineCode=mtx603 Length=300  units=ft
+New Line.L671-684  Phases=2 Bus1=671.1.3   Bus2=684.1.3   LineCode=mtx604 Length=300  units=ft
+New Line.L671-680  Phases=3 Bus1=671       Bus2=680       LineCode=mtx601 Length=1000 units=ft
+New Line.L671-692  Phases=3 Bus1=671       Bus2=692       Switch=y        Length=0.001 units=ft
+New Line.L684-611  Phases=1 Bus1=684.3     Bus2=611.3     LineCode=mtx605 Length=300  units=ft
+New Line.L684-652  Phases=1 Bus1=684.1     Bus2=652.1     LineCode=mtx607 Length=800  units=ft
+New Line.L692-675  Phases=3 Bus1=692       Bus2=675       LineCode=mtx606 Length=500  units=ft
+
+! ── Transformer 633 → 634: 500 kVA, 4.16 kV delta / 0.48 kV wye ─────────────
+
+New Transformer.xfm1 Phases=3 Windings=2
+~ Buses=[633, 634]
+~ conns=[Delta, Wye]
+~ kVAs=[500, 500]
+~ kVs=[4.16, 0.48]
+~ %Rs=[0.55, 0.55]
+~ XHL=2
+
+! ── Spot loads ────────────────────────────────────────────────────────────────
+! Bus 634 — 480 V wye secondary (three separate single-phase PQ loads)
+New Load.L634a Bus1=634.1 Phases=1 Conn=Wye   kV=0.2771  kW=160  kvar=110  Model=1
+New Load.L634b Bus1=634.2 Phases=1 Conn=Wye   kV=0.2771  kW=120  kvar=90   Model=1
+New Load.L634c Bus1=634.3 Phases=1 Conn=Wye   kV=0.2771  kW=120  kvar=90   Model=1
+
+! Bus 645 — phase B only, wye PQ
+New Load.L645b Bus1=645.2   Phases=1 Conn=Wye   kV=2.4017  kW=170  kvar=125  Model=1
+
+! Bus 646 — phases B-C, delta, constant impedance
+New Load.L646bc Bus1=646.2.3 Phases=1 Conn=Delta kV=4.16    kW=230  kvar=132  Model=2
+
+! Bus 671 — 3-phase delta PQ (385 kW, 220 kvar per phase = 1155/660 total)
+New Load.L671 Bus1=671 Phases=3 Conn=Delta kV=4.16 kW=1155 kvar=660 Model=1
+
+! Bus 675 — 3-phase wye, unequal per-phase loads
+New Load.L675a Bus1=675.1 Phases=1 Conn=Wye kV=2.4017 kW=485 kvar=190 Model=1
+New Load.L675b Bus1=675.2 Phases=1 Conn=Wye kV=2.4017 kW=68  kvar=60  Model=1
+New Load.L675c Bus1=675.3 Phases=1 Conn=Wye kV=2.4017 kW=290 kvar=212 Model=1
+
+! Bus 692 — phase C delta, constant current
+New Load.L692c Bus1=692.3.1 Phases=1 Conn=Delta kV=4.16   kW=170  kvar=151  Model=5
+
+! Bus 611 — phase C wye, constant current
+New Load.L611c Bus1=611.3   Phases=1 Conn=Wye   kV=2.4017  kW=170  kvar=80   Model=5
+
+! Bus 652 — phase A wye, constant impedance
+New Load.L652a Bus1=652.1   Phases=1 Conn=Wye   kV=2.4017  kW=128  kvar=86   Model=2
+
+! ── Capacitor banks ───────────────────────────────────────────────────────────
+
+New Capacitor.C675 Bus1=675     Phases=3 kvar=600 kV=4.16
+New Capacitor.C611 Bus1=611.3   Phases=1 kvar=100 kV=2.4
+
+! ── Voltage bases and solve ───────────────────────────────────────────────────
+
+Set VoltageBases=[4.16, 0.48]
+CalcVoltageBases
