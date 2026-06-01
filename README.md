@@ -1,8 +1,15 @@
-# DERMS Explorer
+# IEEE Test Feeders
 
-Interactive distribution feeder analysis using OpenDSS. Visualize voltage profiles, model DER (solar PV) impact, and run hosting capacity sweeps across IEEE test feeders.
+Interactive distribution feeder analysis platform using OpenDSS. Select a module from the sidebar to switch between analytical tools.
 
 **Included feeders:** IEEE 123-Bus · IEEE 13-Bus · IEEE 9500-Node
+
+## Modules
+
+| Module | Description |
+|--------|-------------|
+| **DERMS** | Voltage profiles, DER (solar PV) impact, hosting capacity sweep |
+| **PSPS** | Public Safety Power Shutoff isolation optimizer — finds the minimum-load-shed switching plan to de-energize at-risk line segments |
 
 ---
 
@@ -24,8 +31,8 @@ python --version
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/jacob-wheat-acre/derms-tool.git
-cd derms-tool
+git clone https://github.com/jacob-wheat-acre/ieee-test-feeders.git
+cd ieee-test-feeders
 
 # 2. Create and activate a virtual environment
 python3 -m venv .venv
@@ -42,8 +49,8 @@ streamlit run app.py
 
 ```bat
 :: 1. Clone the repo
-git clone https://github.com/jacob-wheat-acre/derms-tool.git
-cd derms-tool
+git clone https://github.com/jacob-wheat-acre/ieee-test-feeders.git
+cd ieee-test-feeders
 
 :: 2. Create and activate a virtual environment
 python -m venv .venv

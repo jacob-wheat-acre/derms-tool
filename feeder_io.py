@@ -15,8 +15,12 @@ FEEDERS: dict[str, dict] = {
     "IEEE 123-Bus": {
         "master": os.path.join(_ROOT, "feeders", "ieee123", "Run_IEEE123Bus.DSS"),
         "source_bus": "150",
+        "source_pu": 1.00,
         "default_der_bus": "57",
         "caption": "IEEE 123-Bus Test Case (Kersting 1991) · 4.16 kV · 91 loads",
+        "vvo_sub_cap_bus": "149",
+        "vvo_sub_cap_kv": 4.16,
+        "vvo_sub_cap_kvar": 900,
         "profile_intro": (
             "The feeder starts at **Bus 150** (the substation), set at 1.00 pu. Voltage "
             "generally drops as you move away from the substation because current flowing "
@@ -37,8 +41,12 @@ FEEDERS: dict[str, dict] = {
     "IEEE 13-Bus": {
         "master": os.path.join(_ROOT, "feeders", "ieee13", "Run_IEEE13Bus.DSS"),
         "source_bus": "650",
+        "source_pu": 1.05,
         "default_der_bus": "671",
         "caption": "IEEE 13-Node Test Case (Kersting 2001) · 4.16 kV · 8 load buses",
+        "vvo_sub_cap_bus": "632",
+        "vvo_sub_cap_kv": 4.16,
+        "vvo_sub_cap_kvar": 600,
         "profile_intro": (
             "The feeder starts at **Bus 650** (the substation) with a source voltage of 1.06 pu. "
             "A voltage regulator between 650 and 632 maintains voltage near 1.02 pu at the head "
@@ -57,9 +65,14 @@ FEEDERS: dict[str, dict] = {
     "IEEE 9500-Node": {
         "master": os.path.join(_ROOT, "feeders", "ieee9500", "Run_IEEE9500.DSS"),
         "source_bus": "sourcebus",
+        "source_pu": 1.05,
         "default_der_bus": "190-8593",
+        "vvo_sub_cap_bus": "190-8593",
+        "vvo_sub_cap_kv": 12.47,
+        "vvo_sub_cap_kvar": 1800,
         "caption": "IEEE 9500-Node Test Feeder (PNNL) · 12.47 kV · ~9,500 nodes · geographic coordinates",
         "large_feeder": True,
+        "has_latlon": True,
         "der_kv_min": 1.0,
         "hc_sample_n": 60,
         "profile_intro": (
@@ -98,7 +111,10 @@ def solve_base(master: str = "") -> None:
         _current_master = master
     _cmd("Clear")
     _cmd("Set DefaultBaseFrequency=60")
+    import tempfile as _tf
     _cmd(f'Redirect "{_current_master}"')
+    _cmd("Set ShowExport=No")
+    _cmd(f"Set DataPath={_tf.gettempdir()}")
     _cmd("Solve")
 
 
@@ -188,6 +204,43 @@ def extract_loads() -> list[dict]:
     return out
 
 
+def extract_load_xfmr_lines(buses: dict) -> list[dict]:
+    """Line-like dicts for distribution service transformers (< 5 MVA).
+    Connects the primary MV bus to the LV secondary bus so maps can show the
+    visual link between feeder laterals and customer service points.
+    """
+    reg_xfmr_names: set[str] = set()
+    n = dss.RegControls.First()
+    while n:
+        reg_xfmr_names.add(dss.RegControls.Transformer().lower())
+        n = dss.RegControls.Next()
+
+    out = []
+    n = dss.Transformers.First()
+    while n:
+        name = dss.Transformers.Name()
+        if name.lower() not in reg_xfmr_names:
+            kva = dss.Transformers.kVA()
+            dss.Transformers.Wdg(1)
+            kv1 = dss.Transformers.kV()
+            if not (kva >= 5000 and kv1 >= 10.0):
+                dss.Circuit.SetActiveElement(f"Transformer.{name}")
+                bnames = dss.CktElement.BusNames()
+                if len(bnames) >= 2:
+                    b1 = bnames[0].split(".")[0].lower()
+                    b2 = bnames[1].split(".")[0].lower()
+                    if b1 in buses and b2 in buses and b1 != b2:
+                        out.append(dict(
+                            name=f"xfmr:{name}", b1=b1, b2=b2,
+                            x1=buses[b1]["x"], y1=buses[b1]["y"],
+                            x2=buses[b2]["x"], y2=buses[b2]["y"],
+                            nph=dss.CktElement.NumPhases(),
+                            norm_amps=0, pct=0,
+                        ))
+        n = dss.Transformers.Next()
+    return out
+
+
 def extract_substation_transformers(buses: dict) -> list[dict]:
     """Return large power transformers (≥5 MVA, primary ≥10 kV) that have mapped coordinates.
     Excludes regulator-controlled transformers (those are returned by extract_regulators).
@@ -215,7 +268,7 @@ def extract_substation_transformers(buses: dict) -> list[dict]:
             b = dss.CktElement.BusNames()[0].split(".")[0].lower()
             if b in buses:
                 out.append(dict(
-                    name=name, kva=kva, kv1=kv1, kv2=kv2,
+                    name=name, bus=b, kva=kva, kv1=kv1, kv2=kv2,
                     x=buses[b]["x"], y=buses[b]["y"],
                 ))
         n = dss.Transformers.Next()
@@ -312,6 +365,74 @@ def extract_caps() -> list[dict]:
     return out
 
 
+def extract_cap_states(buses: dict | None = None) -> list[dict]:
+    """Capacitors with current on/off state and optional bus coordinates."""
+    out = []
+    n = dss.Capacitors.First()
+    while n:
+        name = dss.Capacitors.Name()
+        dss.Circuit.SetActiveElement(f"Capacitor.{name}")
+        bus    = dss.CktElement.BusNames()[0].split(".")[0].lower()
+        states = list(dss.Capacitors.States())
+        entry  = dict(
+            name=name, bus=bus,
+            kvar=dss.Capacitors.kvar(),
+            phases=dss.CktElement.NumPhases(),
+            states=states,
+            on=all(s == 1 for s in states),
+        )
+        if buses and bus in buses:
+            entry["x"] = buses[bus]["x"]
+            entry["y"] = buses[bus]["y"]
+        out.append(entry)
+        n = dss.Capacitors.Next()
+    return out
+
+
+def extract_reg_taps() -> list[dict]:
+    """Regulator tap number, vreg setpoint, and deadband for each RegControl."""
+    out = []
+    n = dss.RegControls.First()
+    while n:
+        name = dss.RegControls.Name()
+        out.append(dict(
+            name=name,
+            tap=dss.RegControls.TapNumber(),
+            vreg=dss.RegControls.ForwardVreg(),
+            band=dss.RegControls.ForwardBand(),
+            ptratio=dss.RegControls.PTratio(),
+        ))
+        n = dss.RegControls.Next()
+    return out
+
+
+def extract_td_seam_metrics() -> dict:
+    """Reactive power and voltage metrics at the T-D boundary (vsource)."""
+    import math
+    tp  = dss.Circuit.TotalPower()
+    lss = dss.Circuit.Losses()
+    src_kw            = -tp[0]
+    reactive_import   = -tp[1]   # positive = importing Q from transmission
+    loss_kw           = lss[0] / 1000.0
+    denom             = math.sqrt(src_kw ** 2 + reactive_import ** 2)
+    pf                = abs(src_kw) / denom if denom > 0 else 1.0
+    vmags             = [v for v in dss.Circuit.AllBusMagPu() if v > 0.3]
+    n_lo              = sum(1 for v in vmags if v < ANSI_LO)
+    n_hi              = sum(1 for v in vmags if v > ANSI_HI)
+    v_dev             = math.sqrt(
+        sum((v - 1.0) ** 2 for v in vmags) / max(len(vmags), 1)
+    ) if vmags else 0.0
+    return dict(
+        reactive_import_kvar = round(reactive_import, 1),
+        active_power_kw      = round(src_kw, 1),
+        loss_kw              = round(loss_kw, 2),
+        power_factor         = round(pf, 4),
+        n_lo_violations      = n_lo,
+        n_hi_violations      = n_hi,
+        v_deviation_pu       = round(v_dev, 5),
+    )
+
+
 def extract_summary() -> dict:
     tp  = dss.Circuit.TotalPower()
     lss = dss.Circuit.Losses()
@@ -325,6 +446,65 @@ def extract_summary() -> dict:
         n_hi_violations=n_hi,
         converged=dss.Solution.Converged(),
     )
+
+
+# ── Complete topology extraction (no coordinate filter) ───────────────────────
+
+def extract_topology_lines() -> list[dict]:
+    """All lines, switches, and transformers without coordinate filtering.
+    Used by the PSPS optimizer to build a complete network graph.
+    Includes transformer elements so source buses behind regulators stay connected.
+    """
+    out = []
+
+    n = dss.Lines.First()
+    while n:
+        name   = dss.Lines.Name()
+        b1     = dss.Lines.Bus1().split(".")[0].lower()
+        b2     = dss.Lines.Bus2().split(".")[0].lower()
+        nph    = dss.Lines.Phases()
+        length = dss.Lines.Length()
+        is_sw  = bool(dss.Lines.IsSwitch())
+        dss.Circuit.SetActiveElement(f"Line.{name}")
+        is_open = bool(dss.CktElement.IsOpen(1, 0)) if is_sw else False
+        out.append(dict(
+            name=name, b1=b1, b2=b2, nph=nph,
+            length=length, is_switch=is_sw, is_open=is_open,
+        ))
+        n = dss.Lines.Next()
+
+    n = dss.Transformers.First()
+    while n:
+        name = dss.Transformers.Name()
+        dss.Circuit.SetActiveElement(f"Transformer.{name}")
+        bnames = dss.CktElement.BusNames()
+        if len(bnames) >= 2:
+            b1 = bnames[0].split(".")[0].lower()
+            b2 = bnames[1].split(".")[0].lower()
+            out.append(dict(
+                name=f"xfmr:{name}", b1=b1, b2=b2,
+                nph=dss.CktElement.NumPhases(),
+                length=0, is_switch=False, is_open=False,
+            ))
+        n = dss.Transformers.Next()
+
+    n = dss.Reactors.First()
+    while n:
+        name = dss.Reactors.Name()
+        dss.Circuit.SetActiveElement(f"Reactor.{name}")
+        bnames = dss.CktElement.BusNames()
+        if len(bnames) >= 2:
+            b1 = bnames[0].split(".")[0].lower()
+            b2 = bnames[1].split(".")[0].lower()
+            if b1 != b2:
+                out.append(dict(
+                    name=f"reactor:{name}", b1=b1, b2=b2,
+                    nph=dss.CktElement.NumPhases(),
+                    length=0, is_switch=False, is_open=False,
+                ))
+        n = dss.Reactors.Next()
+
+    return out
 
 
 # ── Hosting capacity sweep ─────────────────────────────────────────────────────

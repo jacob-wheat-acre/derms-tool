@@ -17,6 +17,8 @@ from feeder_io import (
     solve_base, extract_buses, extract_lines, extract_loads,
     extract_caps, extract_switches, extract_fuses, extract_regulators,
     extract_substation_transformers, extract_feeder_zones,
+    extract_topology_lines, extract_load_xfmr_lines,
+    extract_cap_states, extract_reg_taps,
     extract_summary, ANSI_LO, ANSI_HI, _cmd,
 )
 
@@ -44,16 +46,19 @@ def mode_base(master: str, out_pkl: str, kv_min: float | None = None) -> None:
     else:
         load_buses = sorted({ld["bus"] for ld in loads if ld["bus"] in buses})
 
-    switches        = extract_switches(buses)
-    fuses           = extract_fuses(buses)
-    regulators      = extract_regulators(buses)
+    switches         = extract_switches(buses)
+    fuses            = extract_fuses(buses)
+    regulators       = extract_regulators(buses)
     sub_transformers = extract_substation_transformers(buses)
-    feeder_zones    = extract_feeder_zones(buses)
+    feeder_zones     = extract_feeder_zones(buses)
+    topology_lines   = extract_topology_lines()
+    load_xfmr_lines  = extract_load_xfmr_lines(buses)
 
     _write(out_pkl, dict(
         buses=buses, lines=lines, loads=loads,
         caps=caps, switches=switches, fuses=fuses, regulators=regulators,
         sub_transformers=sub_transformers, feeder_zones=feeder_zones,
+        topology_lines=topology_lines, load_xfmr_lines=load_xfmr_lines,
         summary=summary, load_buses=load_buses,
     ))
 
@@ -136,6 +141,29 @@ def mode_hc(master: str, buses_json: str, step_kw: float, max_kw: float, out_pkl
     _write(out_pkl, results)
 
 
+def mode_vvo(
+    master: str,
+    objective: str,
+    sub_cap_bus: str,
+    sub_cap_kv: float,
+    sub_cap_kvar: float,
+    ems_voltage_pu: float,
+    base_source_pu: float,
+    out_pkl: str,
+) -> None:
+    from modules.vvo.optimizer import run_scenarios
+    result = run_scenarios(
+        master       = master,
+        objective    = objective,
+        sub_cap_bus  = sub_cap_bus,
+        sub_cap_kv   = sub_cap_kv,
+        sub_cap_kvar = sub_cap_kvar,
+        ems_voltage_pu  = ems_voltage_pu,
+        base_source_pu  = base_source_pu,
+    )
+    _write(out_pkl, result)
+
+
 if __name__ == "__main__":
     mode = sys.argv[1]
     if mode == "base":
@@ -145,5 +173,16 @@ if __name__ == "__main__":
         mode_der(sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]), sys.argv[6])
     elif mode == "hc":
         mode_hc(sys.argv[2], sys.argv[3], float(sys.argv[4]), float(sys.argv[5]), sys.argv[6])
+    elif mode == "vvo":
+        mode_vvo(
+            master         = sys.argv[2],
+            objective      = sys.argv[3],
+            sub_cap_bus    = sys.argv[4],
+            sub_cap_kv     = float(sys.argv[5]),
+            sub_cap_kvar   = float(sys.argv[6]),
+            ems_voltage_pu = float(sys.argv[7]),
+            base_source_pu = float(sys.argv[8]),
+            out_pkl        = sys.argv[9],
+        )
     else:
         sys.exit(f"Unknown mode: {mode}")
