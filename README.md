@@ -31,8 +31,8 @@ python --version
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/jacob-wheat-acre/ieee-test-feeders.git
-cd ieee-test-feeders
+git clone https://github.com/jacob-wheat-acre/derms-tool.git
+cd derms-tool
 
 # 2. Create and activate a virtual environment
 python3 -m venv .venv
@@ -49,8 +49,8 @@ streamlit run app.py
 
 ```bat
 :: 1. Clone the repo
-git clone https://github.com/jacob-wheat-acre/ieee-test-feeders.git
-cd ieee-test-feeders
+git clone https://github.com/jacob-wheat-acre/derms-tool.git
+cd derms-tool
 
 :: 2. Create and activate a virtual environment
 python -m venv .venv
