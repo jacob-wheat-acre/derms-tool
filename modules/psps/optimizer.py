@@ -485,6 +485,24 @@ def add_virtual_switches(G: nx.Graph, new_sw_candidates: list[dict]) -> nx.Graph
     return H
 
 
+def count_special_customers_affected(result: dict, registry) -> dict:
+    """Break out key accounts and medical baseline customers in a result dict.
+
+    Returns:
+      key_accounts_affected, medical_customers_affected  (counts)
+      key_accounts_detail, medical_detail                (CustomerRecord lists)
+    """
+    from .customer_registry import CustomerRegistry  # local import avoids circular dep
+    de_en = set(result["de_energized_buses"])
+    key_affected, med_affected = registry.affected(de_en)
+    return dict(
+        key_accounts_affected=len(key_affected),
+        medical_customers_affected=len(med_affected),
+        key_accounts_detail=key_affected,
+        medical_detail=med_affected,
+    )
+
+
 def count_service_pts_affected(
     result: dict,
     service_buses: set[str],

@@ -15,11 +15,13 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
+from .customer_registry import CustomerRegistry
 from .optimizer import (
     annotate_graph_with_risk,
     add_virtual_switches,
     build_graph,
     count_service_pts_affected,
+    count_special_customers_affected,
     find_new_switch_locations,
     get_at_risk_edges,
     get_candidate_switches,
@@ -82,6 +84,9 @@ optimal isolation point planning.
     bus_risk = annotate_buses(buses)
     annotate_graph_with_risk(G, bus_risk)
     candidates = get_candidate_switches(G)
+
+    all_at_risk = {b for b, info in bus_risk.items() if info.get("tier", 0) >= 2}
+    registry = CustomerRegistry.mock(service_buses, at_risk_buses=all_at_risk)
 
     # Precompute per-tier bus lists (for display)
     buses_by_tier: dict[int, list[str]] = {0: [], 1: [], 2: [], 3: []}
@@ -245,6 +250,15 @@ optimal isolation point planning.
             st.metric("At-risk line segments",  n_risk_edges)
             st.metric("Existing candidate switches", len(candidates))
 
+            st.divider()
+            st.markdown("**Special customers in risk zone**")
+            key_in_risk = [r for r in registry.all_key_accounts() if r.bus_id in at_risk_buses]
+            med_in_risk  = [r for r in registry.all_medical()      if r.bus_id in at_risk_buses]
+            st.metric("Key accounts",        len(registry.all_key_accounts()),
+                      delta=f"{len(key_in_risk)} in risk zone", delta_color="inverse" if key_in_risk else "off")
+            st.metric("Medical customers",   len(registry.all_medical()),
+                      delta=f"{len(med_in_risk)} in risk zone",  delta_color="inverse" if med_in_risk else "off")
+
             run_btn = st.button("🔥 Run Optimizer", type="primary",
                                 key=f"run_opt_{feeder_name}")
 
@@ -266,6 +280,8 @@ optimal isolation point planning.
                     result=result, baseline=baseline,
                     svc_base=svc_base, svc_opt=svc_opt,
                     new_locs=new_locs, psps_tier=psps_tier, budget_n=budget_n,
+                    special_base=count_special_customers_affected(baseline, registry),
+                    special_opt=count_special_customers_affected(result,   registry),
                 )
 
         saved = st.session_state.get(opt_key)
@@ -274,11 +290,13 @@ optimal isolation point planning.
                 st.info("Set parameters and press **Run Optimizer**.")
             return
 
-        result   = saved["result"]
-        baseline = saved["baseline"]
-        svc_base = saved["svc_base"]
-        svc_opt  = saved["svc_opt"]
-        new_locs = saved["new_locs"]
+        result       = saved["result"]
+        baseline     = saved["baseline"]
+        svc_base     = saved["svc_base"]
+        svc_opt      = saved["svc_opt"]
+        new_locs     = saved["new_locs"]
+        special_base = saved.get("special_base", {})
+        special_opt  = saved.get("special_opt",  {})
 
         with oc2:
             st.subheader("Results")
@@ -312,6 +330,50 @@ optimal isolation point planning.
                        delta=f"{svc_opt['collateral']-svc_base['collateral']:+d}",
                        delta_color="inverse")
 
+            if special_base or special_opt:
+                sc1, sc2 = st.columns(2)
+                key_delta = special_opt.get("key_accounts_affected", 0) - special_base.get("key_accounts_affected", 0)
+                med_delta = special_opt.get("medical_customers_affected", 0) - special_base.get("medical_customers_affected", 0)
+                sc1.metric(
+                    "Key accounts affected",
+                    special_opt.get("key_accounts_affected", 0),
+                    delta=f"{key_delta:+d} vs. baseline",
+                    delta_color="inverse",
+                    help="Managed/key accounts de-energized by this PSPS event",
+                )
+                sc2.metric(
+                    "Medical customers affected",
+                    special_opt.get("medical_customers_affected", 0),
+                    delta=f"{med_delta:+d} vs. baseline",
+                    delta_color="inverse",
+                    help="Medical baseline / life-support customers de-energized",
+                )
+
+                key_detail = special_opt.get("key_accounts_detail", [])
+                med_detail  = special_opt.get("medical_detail", [])
+                if key_detail or med_detail:
+                    with st.expander(
+                        f"Affected special customers ({len(key_detail)} key, {len(med_detail)} medical)"
+                    ):
+                        rows = [
+                            {
+                                "Account ID":   r.account_id,
+                                "Name":         r.account_name,
+                                "Type":         "Key Account",
+                                "Bus":          r.bus_id,
+                            }
+                            for r in key_detail
+                        ] + [
+                            {
+                                "Account ID":   r.account_id,
+                                "Name":         r.account_name,
+                                "Type":         "Medical Baseline",
+                                "Bus":          r.bus_id,
+                            }
+                            for r in med_detail
+                        ]
+                        st.dataframe(pd.DataFrame(rows), hide_index=True)
+
             if new_locs:
                 st.markdown(f"**{len(new_locs)} recommended new switch location(s):**")
                 sw_df = pd.DataFrame([
@@ -341,6 +403,7 @@ optimal isolation point planning.
             load_xfmr_lines=load_xfmr_lines,
             sub_transformers=sub_transformers,
         )
+        _add_special_customer_markers(rfig, buses, registry, set(result["de_energized_buses"]))
         st.plotly_chart(rfig, use_container_width=True,
                         config={"scrollZoom": True, "displayModeBar": True})
 
@@ -734,6 +797,69 @@ switching plan using existing switches.
 # ══════════════════════════════════════════════════════════════════════════════
 # Shared helpers
 # ══════════════════════════════════════════════════════════════════════════════
+
+def _add_special_customer_markers(
+    fig: go.Figure,
+    buses: dict,
+    registry: CustomerRegistry,
+    de_energized_buses: set[str],
+) -> None:
+    """Overlay key account (diamond) and medical baseline (cross) markers on a result map.
+
+    Energized special customers use a lighter fill; affected ones use bold color
+    so operators can spot impacted accounts at a glance.
+    """
+    for records, symbol, color_ok, color_affected, label_prefix in [
+        (
+            registry.all_key_accounts(),
+            "diamond", "#FFD600", "#E65100", "Key Account",
+        ),
+        (
+            registry.all_medical(),
+            "cross", "#00ACC1", "#C62828", "Medical Baseline",
+        ),
+    ]:
+        ok_pts:  list[tuple[float, float, str, str]] = []
+        aff_pts: list[tuple[float, float, str, str]] = []
+
+        for r in records:
+            if r.bus_id not in buses:
+                continue
+            x = buses[r.bus_id]["x"]
+            y = buses[r.bus_id]["y"]
+            if r.bus_id in de_energized_buses:
+                aff_pts.append((x, y, r.account_name, r.account_id))
+            else:
+                ok_pts.append((x, y, r.account_name, r.account_id))
+
+        if ok_pts:
+            fig.add_trace(go.Scatter(
+                x=[p[0] for p in ok_pts],
+                y=[p[1] for p in ok_pts],
+                mode="markers",
+                marker=dict(symbol=symbol, size=12, color=color_ok,
+                            line=dict(color="white", width=1.5)),
+                name=f"{label_prefix} — energized",
+                hovertemplate=[
+                    f"<b>{p[2]}</b><br>{p[3]}<br>{label_prefix} — Energized<extra></extra>"
+                    for p in ok_pts
+                ],
+            ))
+
+        if aff_pts:
+            fig.add_trace(go.Scatter(
+                x=[p[0] for p in aff_pts],
+                y=[p[1] for p in aff_pts],
+                mode="markers",
+                marker=dict(symbol=symbol, size=16, color=color_affected,
+                            line=dict(color="white", width=2.0)),
+                name=f"{label_prefix} — AFFECTED",
+                hovertemplate=[
+                    f"<b>{p[2]}</b><br>{p[3]}<br>{label_prefix} — DE-ENERGIZED<extra></extra>"
+                    for p in aff_pts
+                ],
+            ))
+
 
 def _build_base_map(
     buses: dict,
